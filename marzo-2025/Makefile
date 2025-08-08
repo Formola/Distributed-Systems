@@ -15,7 +15,7 @@ clean:
 
 # Run target (optional - runs with 9 processes)
 run: $(TARGET)
-	mpirun -np 3 ./$(TARGET)
+	mpirun -np 9 ./$(TARGET)
 
 # Phony targets
 .PHONY: clean run
