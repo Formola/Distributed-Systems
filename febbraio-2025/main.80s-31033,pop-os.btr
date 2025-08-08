@@ -1,0 +1,16 @@
+
+main:31033 terminated with signal 11 at PC=7080c7faedf4 SP=7ffc48400098.  Backtrace:
+/lib/x86_64-linux-gnu/libc.so.6(+0x1aedf4)[0x7080c7faedf4]
+/lib/x86_64-linux-gnu/libmpich.so.12(+0x217c7b)[0x7080c8417c7b]
+/lib/x86_64-linux-gnu/libmpich.so.12(+0x234dd8)[0x7080c8434dd8]
+/lib/x86_64-linux-gnu/libmpich.so.12(+0x23530f)[0x7080c843530f]
+/lib/x86_64-linux-gnu/libmpich.so.12(+0x179669)[0x7080c8379669]
+/lib/x86_64-linux-gnu/libmpich.so.12(+0x20052f)[0x7080c840052f]
+/lib/x86_64-linux-gnu/libmpich.so.12(+0x20063f)[0x7080c840063f]
+/lib/x86_64-linux-gnu/libmpich.so.12(+0x1ecc8e)[0x7080c83ecc8e]
+/lib/x86_64-linux-gnu/libmpich.so.12(+0x2010af)[0x7080c84010af]
+/lib/x86_64-linux-gnu/libmpich.so.12(PMPI_Allreduce+0x942)[0x7080c823ee82]
+./main(+0x1a89)[0x5a96a9100a89]
+/lib/x86_64-linux-gnu/libc.so.6(+0x29d90)[0x7080c7e29d90]
+/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80)[0x7080c7e29e40]
+./main(+0x1325)[0x5a96a9100325]

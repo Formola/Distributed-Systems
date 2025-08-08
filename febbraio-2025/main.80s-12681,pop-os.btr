@@ -1,0 +1,8 @@
+
+main:12681 terminated with signal 11 at PC=77b99a467149 SP=7ffd8ea2b650.  Backtrace:
+/lib/x86_64-linux-gnu/libc.so.6(+0x67149)[0x77b99a467149]
+/lib/x86_64-linux-gnu/libc.so.6(__isoc99_fscanf+0x9d)[0x77b99a46221d]
+./main(+0x14b0)[0x5ad1ff8014b0]
+/lib/x86_64-linux-gnu/libc.so.6(+0x29d90)[0x77b99a429d90]
+/lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80)[0x77b99a429e40]
+./main(+0x1225)[0x5ad1ff801225]
