@@ -1,7 +1,7 @@
 /*
 Realizzare in mpi C un'applicazione in cui:
 
-- il processo di rango 0 legge da fule una matrice di interi A[DIM][DIM]
+- il processo di rango 0 legge da file una matrice di interi A[DIM][DIM]
   e ne distribuisce a tutti i processi compreso se stesso blocchi di k righe consecutive
   in modalità round-robin.
   DIM si suppone multiplo di k*nproc.
@@ -20,184 +20,202 @@ Realizzare in mpi C un'applicazione in cui:
 #include <math.h>
 
 #define FILE_NAME "matrix.txt"
+#define DIM 12
 
-int *read_matrix_file(const char *filename, int *dim)
+void print_vector(int *v, int dim)
 {
-
-    FILE *file = fopen(filename, "r");
-    if (!file)
+    for (int i = 0; i < dim; i++)
     {
-        perror("error opening file");
-        MPI_Abort(MPI_COMM_WORLD, 1);
+        printf("%d ", v[i]);
     }
-
-    // supponendo il primo elemento da leggere sia la dim della matrice
-    // keep it simple, just read
-    if (fscanf(file, "%d", dim) != 1)
-    {
-        fprintf(stderr, "Error reading matrix dimension\n");
-        fclose(file);
-        MPI_Abort(MPI_COMM_WORLD, 1);
-    }
-
-    int *matrix = (int *)malloc((*dim) * (*dim) * sizeof(int));
-
-    // adesso leggiamo la matrice dal file
-
-    for (int i = 0; i < *dim; i++)
-    {
-
-        for (int j = 0; j < *dim; j++)
-        {
-
-            if (fscanf(file, "%d", &matrix[i * (*dim) + j]) != 1)
-            {
-
-                fprintf(stderr, "Error reading matrix element at [%d][%d]\n", i, j);
-                free(matrix);
-                fclose(file);
-                MPI_Abort(MPI_COMM_WORLD, 1);
-            }
-        }
-    }
-
-    return matrix;
+    printf("\n");
 }
 
-void print_matrix(int *matrix, int row, int col)
+void print_matrix(int *mat, int row, int col)
 {
 
     for (int i = 0; i < row; i++)
     {
         for (int j = 0; j < col; j++)
         {
-            printf("%d ", matrix[i * col + j]);
+            printf("%d ", mat[i * col + j]);
         }
         printf("\n");
     }
 }
 
-void swap_rows(int *matrix, int row1, int row2, int cols)
-{
-    for (int j = 0; j < cols; j++)
-    {
-
-        int temp = matrix[row1 * cols + j];
-        matrix[row1 * cols + j] = matrix[row2 * cols + j];
-        matrix[row2 * cols + j] = temp;
-    }
-}
-
-void sort_rows(int *matrix, int rows, int cols)
-{
-
-    for (int i = 0; i < rows - 1; i++)
-    {
-        for (int j = i + 1; j < rows; j++)
-        {
-
-            if (matrix[i * cols] > matrix[j * cols])
-            {
-
-                swap_rows(matrix, i, j, cols);
-            }
-        }
-    }
-}
-
-
 int main(int argc, char *argv[])
 {
     int rank, size;
+    int dim = DIM;
 
     MPI_Init(&argc, &argv);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-    int dim;
-    int *matrix = NULL;
-
     int k = 2;
+
+    if (dim % (k * size) != 0)
+    {
+        if (rank == 0)
+        {
+            fprintf(stderr, "Errore: DIM deve essere un multiplo intero di k*size\n");
+        }
+        MPI_Finalize();
+        return 1;
+    }
+
+    int num_blocks = dim / k;
+    int blocks_per_proc = num_blocks / size;
+    int block_size = k * dim;
+    int blocks_size = block_size * blocks_per_proc;
+
+    int *V = malloc(blocks_per_proc * k * dim * sizeof(int));
+
+    // datatype for sending blocks of k rows
+    MPI_Datatype blocks_type;
+    MPI_Type_vector(blocks_per_proc, block_size, size*k*dim, MPI_INT, &blocks_type);
+    MPI_Type_commit(&blocks_type);
+
+    //datatype for recv and store in V[blocks_per_proc*k][DIM]
+    // non necessario tanto le righe sono memorizzante in maniera contigua.
+    MPI_Datatype recv_type;
+    MPI_Type_vector(blocks_per_proc, block_size, block_size, MPI_INT, &recv_type);
+    MPI_Type_commit(&recv_type);
 
     if (rank == 0)
     {
-        // Read the matrix from file
-        matrix = read_matrix_file(FILE_NAME, &dim);
-        printf("Matrix read from file (dimension %d):\n", dim);
 
-        if (dim % (k * size) != 0)
+        FILE *fp = fopen(FILE_NAME, "r");
+
+        if (fp == NULL)
         {
-            fprintf(stderr, "Matrix dimension must be divisible by number of processes\n");
-            free(matrix);
+            perror("Errore apertura file");
             MPI_Abort(MPI_COMM_WORLD, 1);
         }
 
-        print_matrix(matrix, dim, dim);
-        printf("\n");
-    }
+        int *A = malloc(dim * dim * sizeof(int));
 
-    // Broadcast the dimension of the matrix to all processes
-    MPI_Bcast(&dim, 1, MPI_INT, 0, MPI_COMM_WORLD);
-
-    // brodcast k row to all processes
-
-    int *my_rows = malloc(k * dim * sizeof(int));
-
-    MPI_Scatter(matrix, k * dim, MPI_INT, my_rows, k * dim, MPI_INT, 0, MPI_COMM_WORLD);
-
-    printf("Process %d received rows:\n", rank);
-    print_matrix(my_rows, k, dim);
-    printf("\n");
-
-    // Sort the rows of the local matrix
-    sort_rows(my_rows, k, dim);
-
-    printf("Process %d sorted rows:\n", rank);
-    print_matrix(my_rows, k, dim);
-    printf("\n");
-    // Find the maximum value in the first column of the local matrix
-
-    int my_val = my_rows[0 * dim + 0];
-    int global_max;
-
-    // chiamata collettiva sincrona, non serve una barrier dopo il sorting dato
-    // che tutti i processi chiamano questa funzione e quindi hanno già finito di ordinare le loro righe
-    MPI_Allreduce(&my_val, &global_max, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
-
-    printf("Process %d knows max value in first column (considering all processes): %d\n", rank, global_max);
-
-    int *max_row = malloc(dim * sizeof(int));
-
-    int my_rank_global_max = (my_val == global_max) ? rank : -1;
-    int global_max_rank;
-
-    MPI_Allreduce(&my_rank_global_max, &global_max_rank, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
-
-    if (rank == global_max_rank)
-    {
-        // Copy the row with the maximum value to max_row
-        for (int j = 0; j < dim; j++)
+        // lettura da file matrix
+        for (int i = 0; i < dim * dim; i++)
         {
-            max_row[j] = my_rows[0 * dim + j];
+            fscanf(fp, "%d", &A[i]);
         }
+
+        printf("Matrice A letta da file:\n");
+        print_matrix(A, dim, dim);
+        printf("\n");
+        fflush(stdout);
+        fclose(fp);
+
+        // proc0 memorizes his blocks before distributing
+        for (int b = 0; b < num_blocks; b += size)
+        {
+            int index = (b / size) * block_size;
+            for (int i = 0; i < dim * k; i++)
+            {
+                V[index + i] = A[b * k * dim + i];
+            }
+        }
+
+        printf("Matrice V for process %d:\n", rank);
+        print_matrix(V, blocks_per_proc * k, dim);
+
+        // now proc0 can sends blocks
+        // with datatype of all blocks per proc, we just need size-1 send
+        for (int p = 1; p < size; p++) {
+
+            MPI_Send(&A[p*k*dim], 1, blocks_type, p, 0, MPI_COMM_WORLD);
+
+        }
+    } else {
+
+
+        // MPI_Recv(V, 1, recv_type, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(V, blocks_size, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+        printf("Matrice V for process %d:\n", rank);
+        print_matrix(V, blocks_per_proc * k, dim);
+        fflush(stdout);
         printf("\n");
     }
 
-    // Broadcast the row with the maximum value to all processes
-    MPI_Bcast(max_row, dim, MPI_INT, global_max_rank, MPI_COMM_WORLD);
 
-    // Print the row with the maximum value
-    printf("Process %d received the row with the maximum value:\n", rank);
-    print_matrix(max_row, 1, dim);
+    // ogni processo ordina le righe di V in senso crescente in base ai valori
+    // nella prima colonna
 
-    if (rank == 0)
-    {
-        free(matrix);
+    for (int i = 0; i < (blocks_per_proc*k)-1; i++) {
+
+        for (int j = i+1; j < (blocks_per_proc*k); j++) {
+
+            if (V[i*dim] > V[j*dim]) {
+
+                //swap whole row
+                for (int k = 0; k < dim; k++) {
+
+                    int temp = V[i*dim + k];
+                    V[i*dim+k] = V[j*dim +k];
+                    V[j*dim+k] = temp;
+                }
+            }
+        }
     }
-    free(my_rows);
-    free(max_row);
+
+    printf("Matrice V ordinata per processo %d:\n", rank);
+    print_matrix(V, blocks_per_proc * k, dim);
+
+
+    // la riga col max in V[0][0] và inviata a tutti
+
+    typedef struct {
+
+        int value;
+        int rank;
+    } maxloc_t;
+
+    maxloc_t local_max, global_max;
+
+    local_max.value = V[0];
+    local_max.rank = rank;
+
+    MPI_Allreduce(&local_max, &global_max, 1, MPI_2INT, MPI_MAXLOC, MPI_COMM_WORLD);
+
+
+    int *recv_V = malloc(blocks_per_proc * k * dim * sizeof(int));
+
+    if ( rank == global_max.rank) {
+
+        int *v_first_row = malloc(dim * sizeof(int));
+        for ( int i = 0; i < dim; i++) {
+            v_first_row[i] = V[i];
+        }
+
+        printf("riga V da inviare %d:\n", rank);
+        print_matrix(v_first_row, 1, dim);
+        fflush(stdout);
+
+        // sono io che devo inviare la mia riga
+        for (int p = 0; p < size; p++) {
+
+            if ( p == rank ) continue;
+            MPI_Send(v_first_row, dim, MPI_INT, p, 1, MPI_COMM_WORLD);
+        }
+        free(v_first_row);
+    } else {
+
+        MPI_Recv(recv_V, dim, MPI_INT, global_max.rank, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+        printf("riga V ricevuta da %d:\n", rank);
+        print_matrix(recv_V, 1, dim);
+        fflush(stdout);
+        printf("\n");
+    }
+
+    free(recv_V);
 
     printf("\n");
+    MPI_Type_free(&blocks_type);
+    MPI_Type_free(&recv_type);
     MPI_Finalize();
     return 0;
 }
