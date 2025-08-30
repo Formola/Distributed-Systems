@@ -21,15 +21,7 @@ Scrivere in C un programma mpi con nproc processi che effettuano:
 #include <math.h>
 
 #define FILE_NAME "input.txt"
-
-void print_vector(int *V, int dim)
-{
-
-    for (int i = 0; i < dim; i++)
-    {
-        printf("%d ", V[i]);
-    }
-}
+#define DIM 20
 
 void print_matrix(int *A, int rows, int cols)
 {
@@ -43,15 +35,13 @@ void print_matrix(int *A, int rows, int cols)
     }
 }
 
-// Returns 1 (true) if rank is present in the vector, 0 (false) otherwise
-int rank_in_vector(int rank, int *vec, int len)
+void print_vector(int *V, int dim)
 {
-    for (int i = 0; i < len; i++)
+    for (int i = 0; i < dim; i++)
     {
-        if (vec[i] == rank)
-            return 1;
+        printf("%d ", V[i]);
     }
-    return 0;
+    printf("\n");
 }
 
 int main(int argc, char *argv[])
@@ -64,149 +54,207 @@ int main(int argc, char *argv[])
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_group(MPI_COMM_WORLD, &group_world);
 
-    int dim = 0;
+    int dim = DIM;
+
+    // check dim / nproc is integer
+    if (rank == 0)
+    {
+        if (dim % (2 * size) != 0)
+        {
+            printf("Error: dim/size would not be even. Change dim or size.\n");
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+    }
+
+    int k = dim / size;
+    int num_blocks = 2; // ogni blocco ha k/2 elementi
+    int block_size = k / num_blocks;
+
     int *V = NULL;
 
-    // proc 0 legge da file
+    int *A = malloc(num_blocks * block_size * sizeof(int)); // 2 righe, k/2 colonne
+
+    // datatype for send all blocks with one send to a proc
+    MPI_Datatype blocks_per_proc;
+    MPI_Type_vector(num_blocks, block_size, size * block_size, MPI_INT, &blocks_per_proc);
+    MPI_Type_commit(&blocks_per_proc);
+
+    // datatype for receiving all blocks together and save them in A[2][k/2]
+    MPI_Datatype recv_type;
+    MPI_Type_vector(num_blocks, block_size, block_size, MPI_INT, &recv_type);
+    MPI_Type_commit(&recv_type);
 
     if (rank == 0)
     {
-        FILE *file = fopen(FILE_NAME, "r");
-        if (file == NULL)
+
+        FILE *fp = fopen(FILE_NAME, "r");
+
+        if (fp == NULL)
         {
-            perror("Error opening file");
-            MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
+            printf("Error opening file %s\n", FILE_NAME);
+            MPI_Abort(MPI_COMM_WORLD, 1);
         }
 
-        fscanf(file, "%d", &dim);
-
-        if (dim % size != 0)
-        {
-            fprintf(stderr, "Dimension %d is not divisible by number of processes %d\n", dim, size);
-            fclose(file);
-            MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
-        }
-
+        // reading vector
         V = malloc(dim * sizeof(int));
 
         for (int i = 0; i < dim; i++)
         {
-            fscanf(file, "%d", &V[i]);
+            fscanf(fp, "%d", &V[i]);
         }
 
-        fclose(file);
+        fclose(fp);
 
-        // Print the vector read from file
-        printf("Vector read from file: ");
-        print_vector(V, dim);
-        printf("\n\n");
-    }
-
-    MPI_Bcast(&dim, 1, MPI_INT, 0, MPI_COMM_WORLD);
-
-    int k = dim / size;     // number of elements per process. size = nproc traccia.
-    int block_size = k / 2; // size of each block to send
-
-    int *local_vector = malloc(k * sizeof(int));
-
-    MPI_Scatter(V, block_size, MPI_INT, local_vector, block_size, MPI_INT, 0, MPI_COMM_WORLD);
-    MPI_Scatter(V + size * block_size, block_size, MPI_INT, local_vector + block_size, block_size, MPI_INT, 0, MPI_COMM_WORLD);
-
-    // Print the local vector for each process
-    printf("Process %d received vector: ", rank);
-    print_vector(local_vector, k);
-
-    int A[2][block_size];
-    for (int i = 0; i < block_size; i++)
-    {
-        A[0][i] = local_vector[i];
-        A[1][i] = local_vector[i + block_size];
-    }
-    printf("\nProcess %d matrix A:\n", rank);
-    print_matrix((int *)A, 2, block_size);
-
-    int my_sum = A[0][0] + A[1][0];
-    printf("Process %d sum of first elements: %d\n", rank, my_sum);
-
-    // 3.point
-    // i 3 processi con la somma maggiore costituiscono un nuovo gruppo da 3 e ognuno manda la propria
-    // matrice A agli altri due
-
-    // find the 3 process with highest value in my_sum
-    MPI_Group new_group;
-    MPI_Comm new_comm;
-
-    int *all_sums = NULL;
-
-    if (rank == 0)
-    {
-        all_sums = malloc(size * sizeof(int));
-    }
-
-    MPI_Gather(&my_sum, 1, MPI_INT, all_sums, 1, MPI_INT, 0, MPI_COMM_WORLD);
-    if (rank == 0)
-    {
-        printf("All sums: ");
-        for (int i = 0; i < size; i++)
-        {
-            printf("%d ", all_sums[i]);
-        }
         printf("\n");
-    }
+        printf("Vector read from file %s:\n", FILE_NAME);
+        print_vector(V, dim);
+        printf("\n");
+        fflush(stdout);
 
-    // Fase 2: calcolare i top 3
-    int top3[3];
-    if (rank == 0)
-    {
-        for (int i = 0; i < 3; i++)
+        // proc0 needs to save his own A matrix
+
+        // for (int b = 0; b < num_blocks; b++)
+        // {
+
+        //     for (int i = 0; i < block_size; i++)
+        //     {
+        //         A[b * block_size + i] = V[b * block_size * size + i];
+        //     }
+        // }
+        // printf("Matrix A of proc %d:\n", rank);
+        // print_matrix(A, num_blocks, block_size);
+        // fflush(stdout);
+
+        // now proc0 sends the two block in each send to processes in round robin
+        for (int p = 0; p < size; p++)
         {
-            int max_idx = -1;
-            int max_val = -999999;
-            for (int j = 0; j < size; j++)
-            {
-                if (all_sums[j] > max_val)
-                {
-                    max_val = all_sums[j];
-                    max_idx = j;
-                }
-            }
-            top3[i] = max_idx;
-            all_sums[max_idx] = -999999; // esclude il trovato
+            MPI_Send(&V[p * block_size], 1, blocks_per_proc, p, 0, MPI_COMM_WORLD);
         }
     }
 
-    // Fase 3: broadcast dei top 3 a tutti
-    MPI_Bcast(top3, 3, MPI_INT, 0, MPI_COMM_WORLD);
 
-    MPI_Group_incl(group_world, 3, top3, &new_group);
+    // ogni altro processo fa 1 recv di tutti i suoi blocchi insieme
+    // ma già in ricezione deve salvarli in A[2][k/2], usiamo datatype
+
+    MPI_Recv(A, 1, recv_type, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+    printf("Matrix A of proc %d:\n", rank);
+    print_matrix(A, num_blocks, block_size);
+    fflush(stdout);
+    
+
+    // ogni processo somma i primi elementi delle due righe
+    int my_sum = 0;
+    my_sum = A[0] + A[block_size];
+    printf("Sum of elements in A[0][0] and A[1][0] of proc %d: %d\n", rank, my_sum);
+    fflush(stdout);
+
+    // i 3 processi con il valore più grande di somma creano un nuovo gruppo
+    // e ciascuno nel gruppo invia la propria matrice A agli altri due
+    typedef struct
+    {
+        int value;
+        int rank;
+    } maxloc_t;
+
+    maxloc_t local_max, global_max;
+
+    int my_sum_copy = my_sum;
+
+    int ranks[3] = {-1,-1,-1};
+    // int rank_max = -1;
+    // int sum_max;
+
+    local_max.value = my_sum_copy;
+    local_max.rank = rank;
+
+    // approccio con maxloc
+    for (int i = 0; i < 3; i++) {
+        
+
+        MPI_Allreduce(&local_max, &global_max, 1, MPI_2INT, MPI_MAXLOC, MPI_COMM_WORLD);
+
+        ranks[i] = global_max.rank;
+
+        if (rank == global_max.rank) {
+            local_max.value = -1; // assegno un valore minimo per non essere più il massimo
+        }
+
+    }
+
+    // approccio senza maxloc
+    // for (int i = 0; i < 3; i++)
+    // {
+
+    //     MPI_Allreduce(&my_sum_copy, &sum_max, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+
+    //     int is_max = (my_sum_copy == sum_max) ? rank : -1;
+    //     if (is_max != -1)
+    //     {
+    //         my_sum_copy = INT32_MIN;
+    //     }
+
+    //     int max_rank;
+    //     MPI_Allreduce(&is_max, &max_rank, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+    //     ranks[i] = max_rank;
+    // }
+
+    printf("Ranks of processes with max sum: %d %d %d\n", ranks[0], ranks[1], ranks[2]);
+
+    // abbiamo i ranks, possiamo costruire il nuovo gruppo
+    // potevamo fare anche direttamente con comm_split con color ?? la traccia vuole per forza gruppo??
+
+    // (rank == ranks[0] || rank == ranks[1] || rank == ranks[2]) ? 1 : MPI_UNDEFINED
+    // int color = (rank == ranks[0] || rank == ranks[1] || rank == ranks[2]) ? 1 : MPI_UNDEFINED;
+
+    // for key, we want that the top rank in ranks starts from 0 in the new comm for example
+    // int key = (rank == ranks[0]) ? 0 : (rank == ranks[1]) ? 1 : 2;
+
+    // MPI_Comm new_comm;
+    // MPI_Comm_split(MPI_COMM_WORLD, color, key, &new_comm);
+
+    // int new_rank;
+    // if (new_comm != MPI_COMM_NULL) {
+    //     MPI_Comm_rank(new_comm, &new_rank);
+    //     printf("New rank of process %d in new_comm: %d\n", rank, new_rank);
+    // }
+
+
+    // creazione gruppo manuale
+    MPI_Group new_group;
+    MPI_Group_incl(group_world, 3, ranks, &new_group);
+
+    MPI_Comm new_comm;
     MPI_Comm_create(MPI_COMM_WORLD, new_group, &new_comm);
 
-    if (new_comm != MPI_COMM_NULL)
-    {
-        int new_size;
-        MPI_Comm_size(new_comm, &new_size);
+    int new_rank;
 
-        // buffer per ricevere tutte le matrici
-        int *rcv_A = malloc(new_size * 2 * block_size * sizeof(int));
+    // ogni processo deve ricevere due matrici
+    int recvs_A[2][2][block_size];
 
-        // raccoglie le matrici da tutti i processi del nuovo gruppo
-        MPI_Allgather(A, 2 * block_size, MPI_INT,
-                      rcv_A, 2 * block_size, MPI_INT,
-                      new_comm);
-
-        int new_rank;
+    if (new_comm != MPI_COMM_NULL) {
         MPI_Comm_rank(new_comm, &new_rank);
-        printf("Process %d (in new_comm rank %d) received matrices:\n", rank, new_rank);
-        MPI_Barrier(new_comm);
-        for (int p = 0; p < new_size; p++)
-        {
-            printf("From process %d in new group:\n", p);
-            print_matrix(rcv_A + p * 2 * block_size, 2, block_size);
+        printf("New rank of process %d in new_comm: %d\n", rank, new_rank);
+
+
+        for (int i = 0; i < 3; i++) {
+            if (i != new_rank) {
+                MPI_Send(A, num_blocks * block_size, MPI_INT, i, 0, new_comm);
+            }
         }
-        free(rcv_A);
+
+        //ognuno fa 2 recv
+        for (int i = 0; i < 2; i++) {
+            MPI_Recv(recvs_A[i], num_blocks * block_size, MPI_INT, MPI_ANY_SOURCE, 0, new_comm, MPI_STATUS_IGNORE);
+            printf("Received matrix A in process %d from %d:\n", new_rank, MPI_ANY_SOURCE);
+            print_matrix(recvs_A[i], 2, block_size);
+            fflush(stdout);
+        }
+
     }
 
-    printf("\n");
+    MPI_Type_free(&blocks_per_proc);
+    MPI_Type_free(&recv_type);
     printf("\n");
     MPI_Finalize();
     return 0;
