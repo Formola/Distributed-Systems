@@ -1,0 +1,26 @@
+/*
+Scrivere in C un programma MPI con nproc processi che effettuano:
+
+- il processo di rango 0 legge da file una matrice quadrata A(dim x dim) di interi.
+
+- il vettore delle colonne di A viene suddiviso tra i processi in modo che ciascun processo riceva k = dim / nproc colonne, non necessariamente consecutive.
+
+- ogni processo riceve una sottomatrice di dimensione dim x k e ne costruisce una matrice trasposta k x dim.
+
+- da questa matrice trasposta, ogni processo costruisce un vettore v di dimensione dim,
+  in cui ogni elemento è il massimo dei valori corrispondenti nelle righe di questa matrice.
+
+- tutti i vettori v vengono raccolti da tutti i processi tramite una comunicazione collettiva.
+
+- ciascun processo calcola la media di tutti gli elementi di tutti i vettori raccolti.
+
+- ogni processo si assegna un colore in base al confronto tra il proprio vettore v e la media:  
+  se almeno un elemento di v è minore della media, il processo assume colore 1, altrimenti colore 0.
+
+- i processi si dividono in due gruppi secondo il colore assegnato.
+
+- all’interno di ciascun gruppo, viene effettuata una riduzione collettiva sui vettori v:  
+  i processi con colore 0 sommano elemento per elemento i loro vettori,  
+  quelli con colore 1 moltiplicano elemento per elemento i loro vettori.
+*/
+
