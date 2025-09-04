@@ -10,7 +10,7 @@ Realizzare in mpi C un'applicazione in cui:
   prima riga della stessa matrice vista come una colonna di
   dim elementi.
 
-- attraverso successive operazioni di calcolo collettivo, 
+- attraverso successive operazioni di calcolo collettivo,
   viene calcolato un vettore che contiene i k elementi più
   grandi a partire dai valori contenuti in tutte le colonne
   ottenute dall'operazione precedente.
@@ -25,6 +25,8 @@ Realizzare in mpi C un'applicazione in cui:
 
 #define FILE_NAME "matrix.txt"
 
+#define DIM 6
+
 void print_mat(int *A, int row, int col)
 {
     for (int i = 0; i < row; i++)
@@ -37,11 +39,21 @@ void print_mat(int *A, int row, int col)
     }
 }
 
-void print_col(int *A, int row, int col){
-    for (int i = 0; i < row; i++)
+void print_vector(int *v, int dim)
+{
+    for (int i = 0; i < dim; i++)
     {
-        printf("%d\n", A[i * col]);
+        printf("%d ", v[i]);
     }
+    printf("\n");
+}
+
+void print_colonna(int *col, int dim){
+    for (int i = 0; i < dim; i++)
+    {
+        printf("%d\n", col[i]);
+    }
+    printf("\n");
 }
 
 int main(int argc, char *argv[])
@@ -52,129 +64,150 @@ int main(int argc, char *argv[])
     MPI_Comm_size(MPI_COMM_WORLD, &size);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
-    int *A = NULL;
-    int dim;
+    int dim = DIM;
 
-    if (rank == 0)
+    int k = dim / size;
+
+    if (dim % (k * size) != 0)
     {
+        if (rank == 0)
+            printf("dim non multiplo di nproc\n");
+        MPI_Finalize();
+        return -1;
+    }
 
-        // legge da file
+    int A[dim][dim];
+
+    if (rank == 0) {
 
         FILE *fp = fopen(FILE_NAME, "r");
-
-        if (fp == NULL)
-        {
-            perror("Error opening file");
+        if (fp == NULL) {
+            perror("Errore apertura file");
             MPI_Abort(MPI_COMM_WORLD, 1);
         }
 
-        // leggi dim
-        fscanf(fp, "%d", &dim);
-
-        if (dim % size != 0)
-        {
-            perror("Dimensione della matrice deve essere multipla del numero di processi");
-            MPI_Abort(MPI_COMM_WORLD, 1);
-        }
-
-        // leggi mat dimxdim
-
-        A = malloc(dim * dim * sizeof(int));
-        for (int i = 0; i < dim * dim; i++)
-        {
-            fscanf(fp, "%d", &A[i]);
-        }
-
-        printf("Matrix read from file:\n");
-        print_mat(A, dim, dim);
-        printf("\n");
-    }
-
-    // send dim to other too
-    MPI_Bcast(&dim, 1, MPI_INT, 0, MPI_COMM_WORLD);
-
-    // distribuzione in round robin di k righe una alla volta
-    int k = dim / size; // k righe per processo
-
-    // k righe * dim colonne
-    int *local_A = malloc(k * dim  * sizeof(int));
-
-    for (int i = 0; i < k; i++){
-        MPI_Scatter(A+i*dim*size, dim, MPI_INT, local_A+i*dim, dim, MPI_INT, 0, MPI_COMM_WORLD);
-    }
-
-    printf("Local matrix for process %d:\n", rank);
-    print_mat(local_A, k, dim);
-
-    // local first row transposed
-    // local_A[0][dim] 
-    int *my_col = malloc(dim*sizeof(int));
-    for (int i = 0; i < dim; i++) {
-        my_col[i] = local_A[0*dim + i];
-    }
-
-    printf("Transposed first row for process %d:\n", rank);
-    print_col(my_col, dim, 1);
-
-    // each process computes the scalar product (k*dim)x(dim*1) = (k*1)
-
-    int *my_product = malloc(k*sizeof(int));
-
-    for (int i = 0; i < k; i++) {
-        my_product[i] = 0;
-        for (int j = 0; j < dim; j++) {
-            my_product[i] += local_A[i*dim + j] * my_col[j];
-        }
-    }
-
-    printf("Local product for process %d:\n", rank);
-    print_col(my_product, k, 1);
-
-
-    // calcolare un vettore che contiene i k
-    // valori più grandi presenti in tutte le colonne my_product
-
-    
-    int *top_k_global = malloc(k * sizeof(int));
-
-    int *tmp_values = malloc(k * sizeof(int));
-    memcpy(tmp_values, my_product, k * sizeof(int));
-    
-    int global_max;
-
-    for (int i = 0; i < k; i++) {
-        
-
-
-        MPI_Allreduce(tmp_values, &global_max, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
-
-        top_k_global[i] = global_max;
-        
-
-        // remove global_max from tmp_values
-        for (int j = 0; j < k; j++) {
-            if (tmp_values[j] == global_max) {
-                tmp_values[j] = INTMAX_MIN;
-                break;
+        for (int i = 0; i < dim; i++) {
+            for (int j = 0; j < dim; j++) {
+                fscanf(fp, "%d", &A[i][j]);
             }
         }
 
+        printf("Matrice letta:\n");
+        print_mat(&A[0][0], dim, dim);
+        printf("\n");
+        fflush(stdout);
     }
 
-    printf("Top %d values across all processes:\n", k);
+    // ogni processo riceve k righe, una alla volta in round robin
+    int T[k][dim];
+
+    // usiamo un datatype di send per mandare tutte le k righe insieme
+    MPI_Datatype k_rows_type;
+    MPI_Type_vector(k, dim, size*dim, MPI_INT, &k_rows_type);
+    MPI_Type_commit(&k_rows_type);
+
+    if (rank == 0){
+
+        for (int p = 0; p < size; p++) {
+            MPI_Send(&A[p][0], 1, k_rows_type, p, 0, MPI_COMM_WORLD);
+        }
+
+    }
+
+    // tutti, compreso proc0, ricevono in T
+    MPI_Recv(&T[0][0], k*dim, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+    printf("Process %d ha ricevuto la matrice T:\n", rank);
+    print_mat(&T[0][0], k, dim);
+    fflush(stdout);
+
+    // bisogna fare il prodotto della prima riga ma vista come colonna
+    int my_first_col[dim];
+
+    for (int i = 0; i < dim; i++){
+        my_first_col[i] = T[0][i];
+    }
+
+    printf("Process %d ha calcolato la prima riga vista come colonna per il prodotto:\n", rank);
+    print_colonna(my_first_col, dim);
+    fflush(stdout);
+
+    // prodotto matrice * colonna
+    // [k][dim] * [dim][1] = [k][1]
+
+    int my_prod[k];
+
     for (int i = 0; i < k; i++) {
-        printf("%d ", top_k_global[i]);
+        my_prod[i] = 0;
+        for (int j = 0; j < dim; j++) {
+
+            my_prod[i] += T[i][j] * my_first_col[j];
+        }
     }
-    printf("\n");
-    
+
+    printf("Process %d ha calcolato il prodotto:\n", rank);
+    print_colonna(my_prod, k);
+    fflush(stdout);
 
 
+    // attraverso operazioni di calcolo collettiver successive,
+    // viene calcolato un vettore che contiene i k elementi
+    // più grandi a partire dai calori contenuti in 
+    // tutte le colonne dell'operazione di prodotto
 
-    free(local_A);
-    free(my_col);
-    free(my_product);
-    free(tmp_values);
-    printf("\n");
+    int max_values[k];
+
+    typedef struct {
+        int value;
+        int rank;
+    } maxloc_t;
+
+    maxloc_t local_max, global_max;
+
+    int my_prod_copy[k];
+    for (int i = 0; i < k; i++){
+        my_prod_copy[i] = my_prod[i];
+    }
+
+    int my_max;
+
+    for (int i = 0; i < k; i++){
+
+        my_max = my_prod_copy[0];
+        for (int j = 1; j < k; j++){
+            if (my_prod_copy[j] > my_max){
+                my_max = my_prod_copy[j];
+            }
+        }
+
+        local_max.value = my_max;
+        local_max.rank = rank;
+
+        MPI_Allreduce(&local_max, &global_max, 1, MPI_2INT, MPI_MAXLOC, MPI_COMM_WORLD);
+
+
+        // questo controllo potrebbe far si che ci siano doppioni di valori max nel vettore finale
+        if (rank == global_max.rank){
+            
+            // devo 'rimuovere' il max dal prossimo giro
+            for (int j = 0; j < k; j++){
+
+                if (my_prod_copy[j] == global_max.value){
+                    my_prod_copy[j] = INT32_MIN;
+                }
+            }
+        }
+
+        max_values[i] = global_max.value;
+
+    }
+
+    printf("Process %d ha calcolato i k massimi:\n", rank);
+    print_colonna(max_values, k);
+    fflush(stdout);
+
+
+    MPI_Type_free(&k_rows_type);
     MPI_Finalize();
     return 0;
 }
