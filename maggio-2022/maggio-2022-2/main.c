@@ -161,7 +161,7 @@ int main(int argc, char *argv[])
     int new_size;
 
     int ndims = 2;
-    int dims[2] = {2, size/2};
+    int dims[2];
     int periods[2] = {1,1};
     int coords[2];
     MPI_Comm topology;
@@ -170,6 +170,9 @@ int main(int argc, char *argv[])
         
         MPI_Comm_rank(new_comm, &new_rank);
         MPI_Comm_size(new_comm, &new_size);
+
+        dims[0] = 2; // righe
+        dims[1] = new_size / 2; // colonne
 
         MPI_Cart_create(new_comm, ndims, dims, periods, 0, &topology);
         MPI_Cart_coords(topology, new_rank, ndims, coords);
