@@ -1,0 +1,20 @@
+/*
+Scrivere in C un programma MPI con nproc processi che effettuano:
+
+- il processo di rango 0 legge da file un vettore di interi V(dim) e lo suddivide tra i processi.
+  Ogni processo riceve k = dim / nproc elementi, organizzati in una matrice A[2][k/2], cioè due righe di k/2 elementi ciascuna.
+
+- ogni processo ordina in ordine crescente ciascuna delle due righe di A,
+  poi confronta il primo elemento della prima riga con quello della seconda riga
+  e assegna a sé stesso un colore: 0 se il primo elemento della prima riga è minore,
+  1 altrimenti.
+
+- i processi si suddividono in due gruppi in base al colore assegnato.
+  Ogni processo seleziona il vettore corrispondente alla riga di A associata al proprio colore
+  (prima riga per colore 0, seconda riga per colore 1).
+
+- all’interno di ogni gruppo viene effettuata una riduzione collettiva su questi vettori:
+  il gruppo 0 somma elemento per elemento i vettori,
+  il gruppo 1 moltiplica elemento per elemento i vettori.
+*/
+
